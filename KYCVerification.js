@@ -466,7 +466,7 @@ async function KYCVerification(){
      var PEPResponse= await PEPScreening('Frederic ','LOUA');
      KYCScore=+PEPResponse;
      console.log(PEPResponse);
-     var bankResponse= await bankAccount('1111222233330000',"access-sandbox-e7081ef4-c300-4b58-a1e4-e17db31389b7");
+     var bankResponse= await bankAccount('',"");
      KYCScore+=bankResponse;
      console.log(bankResponse);
      return KYCScore;
