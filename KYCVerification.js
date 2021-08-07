@@ -69,7 +69,7 @@ async function IDParsing(img,country){
         try {
                 const response = await axios.get('https://api.pixlab.io/docscan',{
                         params:{
-                                'key':'0e7001c8fc04f54f1dd7289a97752fa5',
+                                'key':'pixlabAPIkey',
                                 'img':img,
                                 'type':'idcard',
                                 'country':country
@@ -91,7 +91,7 @@ async function PassportParse(img){
         try {
                 const response = await axios.get('https://api.pixlab.io/docscan',{
                         params:{
-                                'key':'0e7001c8fc04f54f1dd7289a97752fa5',
+                                'key':pixlabAPIkey,
                                 'img':img,
                                 'type':'passport',
                         }
