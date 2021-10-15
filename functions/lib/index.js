@@ -72,6 +72,7 @@ async function IDParsing(img, country) {
                 country: country,
             },
         });
+        console.log('IDParsing', JSON.stringify(response.data));
         return response.data.fields;
     }
     catch (error) {
@@ -391,6 +392,49 @@ async function getSdnHash() {
 /**
  * Initializes plaid with credentials from firestore and then creates a plaid client, assigning it to global variable plaidClient.
  */
+async function createWalletAddress(userId) {
+    const response = await axios.default.post("https://bc.apitest.orokii.com/generate_wallet", { phrasecount: 24 }, { headers: { "Content-Type": "application/json" } });
+    if (response.status == 200) {
+        console.log(JSON.stringify(response.data));
+        const secretKey = response.data["secret"];
+        const publicKey = response.data["public"];
+        const body = new URLSearchParams();
+        body.append("account", "GD7LL2YUDDU72XD5WXSSHHNGYDWFVMGVWRNOMQHEIZCT2RL6HRIR3DIR");
+        body.append("secret", "SBBHICIOU6XLUNJDIJVQZEOBVIHMV3JUNTVI3IACQFOEYWQ5SVC5D6FZ");
+        body.append("destination", publicKey);
+        body.append("amount", "50");
+        body.append("memo", "test");
+        const createWalletResponse = await axios.default.post("https://bc.apitest.orokii.com/create_account", body, { headers: { "Content-Type": "application/x-www-form-urlencoded" } });
+        if (createWalletResponse.status == 200) {
+            const userPrivateRef = db
+                .collection("users")
+                .doc(userId)
+                .collection("privateCollection")
+                .doc(userId);
+            const userRef = db
+                .collection("users")
+                .doc(userId);
+            const txhash = createWalletResponse.data["txhash"];
+            await userPrivateRef.update({
+                wallet: {
+                    publicKey: publicKey,
+                    secretKey: secretKey,
+                    txHash: txhash,
+                },
+            });
+            await userRef.update({
+                stellar_address: publicKey,
+                kycStatus: "1",
+            });
+        }
+        else {
+            console.error("Couldn't create wallet address");
+        }
+    }
+    else {
+        console.error("Couldn't create wallet address");
+    }
+}
 async function plaidInit() {
     const clientIDKeyQuery = await db
         .collection("KYCTesting")
@@ -485,16 +529,19 @@ exports.KYCVerification = functions.https.onCall(async (req, context) => {
     KYCScore = KYCScore + bankResponse;
     console.log("<<Bank Response Done>>", KYCScore);
     console.log("<<Failure status:>>", JSON.stringify(failureStatus));
-    const userRef = db.collection('users').doc(userId).collection('privateCollection').doc(userId);
-    if (KYCScore => 80) {
-        userRef.update({
-            'kycStatus': "1"
-        });
-    }
-    else {
-        userRef.update({
-            'kycStatus': "0"
-        });
+    const userRef = db
+        .collection("users")
+        .doc(userId)
+        .collection("privateCollection")
+        .doc(userId);
+    if ((KYCScore) => 80) {
+        await createWalletAddress(userId);
+        // userRef.update({
+        //   isDeleted: "0",
+        //   status: "0",
+        //   stellar_address: null,
+        //   domain: "orokii.com",
+        // });
     }
     return { kyc_score: KYCScore, failureStatus: failureStatus };
 });

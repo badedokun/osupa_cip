@@ -1,7 +1,6 @@
-
 const fuzz = require("fuzzball");
 import * as admin from "firebase-admin";
-import * as axios  from "axios";
+import * as axios from "axios";
 const csv = require("csv-parser");
 const pdf = require("pdf-parse");
 const fs = require("fs");
@@ -35,16 +34,19 @@ admin.firestore().settings({
  * @param {String} targetImage Can be photo of ID
  * @returns {Integer} Returns 20 to increment to the KYC score if the confidence score is above 0.80, otherwise return 0
  */
-async function faceCompare(srcImage, targetImage) : Promise<number> {
+async function faceCompare(srcImage, targetImage): Promise<number> {
   try {
     //sends data to pixlab
-    const response = await axios.default.get("https://api.pixlab.io/facecompare", {
-      params: {
-        key: "041b94d6d1f33c9e138987f82b42ec43",
-        src: srcImage,
-        target: targetImage,
-      },
-    });
+    const response = await axios.default.get(
+      "https://api.pixlab.io/facecompare",
+      {
+        params: {
+          key: "041b94d6d1f33c9e138987f82b42ec43",
+          src: srcImage,
+          target: targetImage,
+        },
+      }
+    );
     //Two different response options:
     //console.log(response.data.confidence);
     //console.log(response.data.same_face);
@@ -76,6 +78,7 @@ async function IDParsing(img, country) {
         country: country,
       },
     });
+    console.log('IDParsing',JSON.stringify(response.data));
     return response.data.fields;
   } catch (error) {
     console.error(error);
@@ -114,7 +117,12 @@ async function IDParsing(img, country) {
  * @param {Object} IDParseJSON JSON object from IDParsing() function
  * @returns {Integer} Returns 20 if fuzz ratio is more than or equal to 90, otherwise returns 0 and the data is assumed to not be the same
  */
-async function dataCompare(ufirstName, umiddleName, ulastName, IDParseJSON) : Promise<number> {
+async function dataCompare(
+  ufirstName,
+  umiddleName,
+  ulastName,
+  IDParseJSON
+): Promise<number> {
   var dataValidation;
   await db
     .collection("users")
@@ -132,7 +140,9 @@ async function dataCompare(ufirstName, umiddleName, ulastName, IDParseJSON) : Pr
           doc.data().address,
           IDParseJSON["address"]
         );
+
         //dob_fuzz_ratio
+        
         if (name_fuzz_ratio >= 85 && address_fuzz_ratio >= 85) {
           dataValidation = true;
         } else {
@@ -166,7 +176,7 @@ async function MRZCompare(nameString, MRZString) {
  * @returns {Integer} returns 0 if name is found, 20 if not
  */
 async function PEPScreening(firstName, lastName) {
-  let nameFound:boolean = false;
+  let nameFound: boolean = false;
   //performs a touppercase() on lastname, because in the collection all lastnames are uppercase
   const query = await db
     .collection("CIA PEP")
@@ -193,7 +203,7 @@ async function PEPScreening(firstName, lastName) {
  * @returns {Integer} returns 0 if name is found, 20 if not
  */
 async function ofacScreening(firstName, lastName) {
-  let nameFound:boolean = false;
+  let nameFound: boolean = false;
   const query = await db
     .collection("OFAC SDN")
     .where("FIRSTNAME", "==", firstName.trim())
@@ -242,7 +252,7 @@ async function ofacScreening(firstName, lastName) {
 
 //used for ofacupdate
 //ofacUpdate uses this function instead of ofacScreening for querying OFAC SDN
-async function ofacExistenceCheck(lastName, firstName) : Promise<boolean> {
+async function ofacExistenceCheck(lastName, firstName): Promise<boolean> {
   var nameFound = false;
   const query = await db
     .collection("OFAC SDN")
@@ -265,7 +275,7 @@ const {
  */
 
 async function ofacUpdate(csvFile) {
-  let doesExist:boolean;
+  let doesExist: boolean;
   var readStream = fs
     .createReadStream(csvFile)
     .pipe(csv())
@@ -276,7 +286,7 @@ async function ofacUpdate(csvFile) {
         if (data["SDNTYPE"] == "individual") {
           var name = data["NAME"].split(",");
           if (name[0] != null && name[1] != null) {
-             doesExist = await ofacExistenceCheck(
+            doesExist = await ofacExistenceCheck(
               name[0].trim(),
               name[1].trim()
             );
@@ -416,6 +426,63 @@ async function getSdnHash() {
 /**
  * Initializes plaid with credentials from firestore and then creates a plaid client, assigning it to global variable plaidClient.
  */
+
+async function createWalletAddress(userId: string) {
+  const response = await axios.default.post(
+    "https://bc.apitest.orokii.com/generate_wallet",
+    { phrasecount: 24 },
+    { headers: { "Content-Type": "application/json" } }
+  );
+  if (response.status == 200) {
+    console.log(JSON.stringify(response.data));
+    const secretKey = response.data["secret"];
+    const publicKey = response.data["public"];
+    const body = new URLSearchParams();
+    body.append(
+      "account",
+      "GD7LL2YUDDU72XD5WXSSHHNGYDWFVMGVWRNOMQHEIZCT2RL6HRIR3DIR"
+    );
+    body.append(
+      "secret",
+      "SBBHICIOU6XLUNJDIJVQZEOBVIHMV3JUNTVI3IACQFOEYWQ5SVC5D6FZ"
+    );
+    body.append("destination", publicKey);
+    body.append("amount", "50");
+    body.append("memo", "test");
+    const createWalletResponse = await axios.default.post(
+      "https://bc.apitest.orokii.com/create_account",
+      body,
+      { headers: { "Content-Type": "application/x-www-form-urlencoded" } }
+    );
+    if (createWalletResponse.status == 200) {
+      const userPrivateRef = db
+        .collection("users")
+        .doc(userId)
+        .collection("privateCollection")
+        .doc(userId);
+        const userRef = db
+        .collection("users")
+        .doc(userId);
+      const txhash = createWalletResponse.data["txhash"];
+      await userPrivateRef.update({
+        wallet: {
+          publicKey: publicKey,
+          secretKey: secretKey,
+          txHash: txhash,
+        },
+      });
+      await userRef.update({
+        stellar_address: publicKey,
+        kycStatus: "1",
+      });
+ 
+    } else {
+      console.error("Couldn't create wallet address");
+    }
+  } else {
+    console.error("Couldn't create wallet address");
+  }
+}
 async function plaidInit() {
   const clientIDKeyQuery = await db
     .collection("KYCTesting")
@@ -472,18 +539,18 @@ async function bankAccount(bankNumber, accessToken) {
  * @returns {Integer} this is the sum of the kyc score. The range <50 fails, 50-80 requires manual verification, while > 80 passes and the kyc flag is set and approved
  */
 export interface data {
-  userId : string,
-  IDimageLink: string,
-  userSelfie : string,
-  firstName : string,
-  middleName : string,
-  lastName : string,
-  accountNumber :string
+  userId: string;
+  IDimageLink: string;
+  userSelfie: string;
+  firstName: string;
+  middleName: string;
+  lastName: string;
+  accountNumber: string;
 }
 exports.KYCVerification = functions.https.onCall(async (req: data, context) => {
   //URL I USED FOR TESTING
   //http://us-central1-osupa-f56dd.cloudfunctions.net/KYCVerification?IDimageLink=https://i.pinimg.com/736x/01/ff/a4/01ffa4a5e42d820a28761311ac13f174.jpg&userSelfie=https://i.pinimg.com/736x/01/ff/a4/01ffa4a5e42d820a28761311ac13f174.jpg&firstName=MUHAMMAD%20ZHAFRAN&lastName=BIN%20KEMAT&middleName=&accountNumber=1111222233330000
-  var failureStatus:string[] = [];
+  var failureStatus: string[] = [];
   //array that gets appended string if fails
   var idImage = req.IDimageLink;
   var selfie = req.userSelfie;
@@ -497,7 +564,7 @@ exports.KYCVerification = functions.https.onCall(async (req: data, context) => {
   await plaidInit();
   console.log("<<Starting>>");
   var IDParseResponse = await IDParsing(idImage, "malaysia"); //'united states'
-  const faceCompareResponse:number = await faceCompare(idImage, selfie);
+  const faceCompareResponse: number = await faceCompare(idImage, selfie);
   if (faceCompareResponse != 20) {
     failureStatus.push("Face comparison failed");
   }
@@ -506,7 +573,7 @@ exports.KYCVerification = functions.https.onCall(async (req: data, context) => {
 
   console.log("<<FaceCompare Done>>", KYCScore);
 
-  let dataCompareResponse:number = await dataCompare(
+  let dataCompareResponse: number = await dataCompare(
     userFirst,
     userMiddle,
     userLast,
@@ -553,15 +620,19 @@ exports.KYCVerification = functions.https.onCall(async (req: data, context) => {
   console.log("<<Bank Response Done>>", KYCScore);
 
   console.log("<<Failure status:>>", JSON.stringify(failureStatus));
-  const userRef = db.collection('users').doc(userId).collection('privateCollection').doc(userId);
-  if(KYCScore => 80){
-    userRef.update({
-      'kycStatus' : "1"
-    });
-  } else{
-    userRef.update({
-      'kycStatus' : "0"
-    });
+  const userRef = db
+    .collection("users")
+    .doc(userId)
+    .collection("privateCollection")
+    .doc(userId);
+  if ((KYCScore) => 80) {
+    await createWalletAddress(userId);
+    // userRef.update({
+    //   isDeleted: "0",
+    //   status: "0",
+    //   stellar_address: null,
+    //   domain: "orokii.com",
+    // });
   }
-  return {kyc_score: KYCScore, failureStatus: failureStatus };
+  return { kyc_score: KYCScore, failureStatus: failureStatus };
 });
