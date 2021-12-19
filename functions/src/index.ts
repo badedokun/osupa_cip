@@ -584,7 +584,7 @@ exports.KYCVerification = functions.https.onCall(async (req: data, context) => {
   }
   KYCScore = KYCScore + dataCompareResponse;
 
-  console.log("<<Date Compare Done>>", KYCScore);
+  console.log("<<Data Compare Done>>", KYCScore);
 
   var sdnResponse = await ofacScreening(
     userFirst.toString(),
@@ -627,12 +627,6 @@ exports.KYCVerification = functions.https.onCall(async (req: data, context) => {
     .doc(userId);
   if ((KYCScore) => 80) {
     await createWalletAddress(userId);
-    // userRef.update({
-    //   isDeleted: "0",
-    //   status: "0",
-    //   stellar_address: null,
-    //   domain: "orokii.com",
-    // });
   }
   return { kyc_score: KYCScore, failureStatus: failureStatus };
 });
