@@ -6,6 +6,8 @@ const pdf = require("pdf-parse");
 const fs = require("fs");
 var cron = require("node-cron");
 const https = require("https");
+
+const crypto = require("crypto");
 const plaid = require("plaid");
 const { exec } = require("child_process");
 const serviceAccount = require("./osupa-f56dd-firebase-adminsdk-x4l47-e2a1f979c2.json");
@@ -35,6 +37,8 @@ admin.firestore().settings({
  * @returns {Integer} Returns 20 to increment to the KYC score if the confidence score is above 0.80, otherwise return 0
  */
 async function faceCompare(srcImage, targetImage): Promise<number> {
+  console.log("src image :"+srcImage)
+  console.log("target image :"+targetImage)
   try {
     //sends data to pixlab
     const response = await axios.default.get(
@@ -49,8 +53,8 @@ async function faceCompare(srcImage, targetImage): Promise<number> {
     );
     //Two different response options:
     //console.log(response.data.confidence);
-    //console.log(response.data.same_face);
-    if (response.data.confidence >= 0.8) {
+    console.log("face compare data : "+response.data);
+    if (response.data.confidence >= 0.8 && response.data.same_face == true) {
       return 20;
     } else {
       return 0;
@@ -78,8 +82,15 @@ async function IDParsing(img, country) {
         country: country,
       },
     });
-    console.log('IDParsing',JSON.stringify(response.data));
-    return response.data.fields;
+    
+    if(response.status==400)
+    {
+      return null
+    }
+    else{
+      return response.data.fields;
+    }
+   
   } catch (error) {
     console.error(error);
   }
@@ -131,6 +142,8 @@ async function dataCompare(
     .where("lastName", "==", ulastName)
     .get()
     .then((snapshot) => {
+      if(IDParseJSON["name"] != null || IDParseJSON["name"] != undefined) {
+
       snapshot.docs.forEach((doc) => {
         const name_fuzz_ratio = fuzz.ratio(
           ufirstName + umiddleName + ulastName,
@@ -142,13 +155,17 @@ async function dataCompare(
         );
 
         //dob_fuzz_ratio
-        
+
         if (name_fuzz_ratio >= 85 && address_fuzz_ratio >= 85) {
           dataValidation = true;
         } else {
           dataValidation = false;
         }
       });
+      
+    } else {
+      dataValidation = false;
+    }
     });
   if (dataValidation == true) {
     return 20;
@@ -429,28 +446,31 @@ async function getSdnHash() {
 
 async function createWalletAddress(userId: string) {
   const response = await axios.default.post(
-    "https://bc.apitest.orokii.com/generate_wallet",
+    "https://sepapi.orokii.com/generate_wallet",
     { phrasecount: 24 },
     { headers: { "Content-Type": "application/json" } }
   );
+  console.log('create wallet')
+  console.dir(response.data)
   if (response.status == 200) {
     console.log(JSON.stringify(response.data));
     const secretKey = response.data["secret"];
     const publicKey = response.data["public"];
     const body = new URLSearchParams();
-    body.append(
-      "account",
-      "GD7LL2YUDDU72XD5WXSSHHNGYDWFVMGVWRNOMQHEIZCT2RL6HRIR3DIR"
-    );
-    body.append(
-      "secret",
-      "SBBHICIOU6XLUNJDIJVQZEOBVIHMV3JUNTVI3IACQFOEYWQ5SVC5D6FZ"
-    );
+    // body.append(
+    //   "account",
+    //   publicKey
+    // );
+    // body.append(
+    //   "secret",
+    //   "SBBHICIOU6XLUNJDIJVQZEOBVIHMV3JUNTVI3IACQFOEYWQ5SVC5D6FZ"
+    // );
+    console.log('my public : '+publicKey)
     body.append("destination", publicKey);
-    body.append("amount", "50");
+    body.append("amount", "2");
     body.append("memo", "test");
     const createWalletResponse = await axios.default.post(
-      "https://bc.apitest.orokii.com/create_account",
+      "https://sepapi.orokii.com/create_account",
       body,
       { headers: { "Content-Type": "application/x-www-form-urlencoded" } }
     );
@@ -460,22 +480,28 @@ async function createWalletAddress(userId: string) {
         .doc(userId)
         .collection("privateCollection")
         .doc(userId);
-        const userRef = db
-        .collection("users")
-        .doc(userId);
+      
       const txhash = createWalletResponse.data["txhash"];
-      await userPrivateRef.update({
-        wallet: {
-          publicKey: publicKey,
-          secretKey: secretKey,
-          txHash: txhash,
-        },
+      await userPrivateRef.get().then((res)=>{
+        res.ref.update({
+          wallet: {
+            publicKey: publicKey,
+            secretKey: secretKey,
+            txHash: txhash,
+          },
+        });
+
+        console.log("private collection updated with txHash : "+txhash)
+      })
+   await db.collection("users").doc(userId).get().then((result)=>{
+        result.ref.update({
+          stellar_address: publicKey,
+          kycStatus: "1",
+        });
+
+        console.log("user collection updated with steller address: "+publicKey)
       });
-      await userRef.update({
-        stellar_address: publicKey,
-        kycStatus: "1",
-      });
- 
+     
     } else {
       console.error("Couldn't create wallet address");
     }
@@ -564,6 +590,7 @@ exports.KYCVerification = functions.https.onCall(async (req: data, context) => {
   await plaidInit();
   console.log("<<Starting>>");
   var IDParseResponse = await IDParsing(idImage, "malaysia"); //'united states'
+//------------------------------------------------
   const faceCompareResponse: number = await faceCompare(idImage, selfie);
   if (faceCompareResponse != 20) {
     failureStatus.push("Face comparison failed");
@@ -582,6 +609,9 @@ exports.KYCVerification = functions.https.onCall(async (req: data, context) => {
   if (dataCompareResponse != 20) {
     failureStatus.push("Data comparison failed");
   }
+
+
+  //---------------------------------------
   KYCScore = KYCScore + dataCompareResponse;
 
   console.log("<<Data Compare Done>>", KYCScore);
@@ -625,8 +655,155 @@ exports.KYCVerification = functions.https.onCall(async (req: data, context) => {
     .doc(userId)
     .collection("privateCollection")
     .doc(userId);
-  if ((KYCScore) => 80) {
+
+    console.log("final score : "+KYCScore)
+  if (KYCScore > 79) {
+    console.log("user id : "+userId)
     await createWalletAddress(userId);
   }
   return { kyc_score: KYCScore, failureStatus: failureStatus };
 });
+
+/**
+ * This function is a cron job that periodically runs at 3:30am on the 15th of every month, it downloads the sdn.csv file, hashes the file, compares the hash to the previous generated hash located in firestore, if they differ then the function uses sed to add required
+ * headings to sdn.csv for csvparse() in ofacUpdate() and then passes the file to ofacUpdate
+ */
+// cron.schedule('30 3 15 * *', async () => {
+// exports.cronSdn= functions.pubsub.schedule('30 3 15 * *')
+//     .timeZone('America/New_York') // Users can choose timezone - default is America/Los_Angeles
+//     .onRun(async (context) => {
+ 
+ 
+//     var ressult = await axios.default.get(
+//     "https://www.treasury.gov/ofac/downloads/sdn.csv"
+//   );
+
+//   var array = ressult.data.split("\r\sn");
+
+//   var hash = await crypto
+//     .createHash("sha256")
+//     .update(ressult.data)
+//     .digest("hex");
+
+//   var firebaseHash;
+//   await db
+//     .collection("KYCTesting")
+//     .doc("sdnSHA256")
+//     .get()
+//     .then((snapshot) => {
+//       firebaseHash = snapshot.data();
+
+//       if (hash != firebaseHash) {
+//         console.log("updated hash : "+hash)
+//         db.collection("KYCTesting").doc("sdnSHA256").update({sdnFileHash:hash});
+//         db.collection("ofacSdn")
+//           .listDocuments()
+//           .then((val) => {
+//             val.map((val) => {
+//               val.delete();
+//             });
+//           });
+//         var asd: any[] = [];
+//         array.forEach((element, index) => {
+//           if (index == array.length - 1) {
+//           } else {
+//             var commaSapretedArray = element.split(",");
+
+//             console.dir(
+//               commaSapretedArray[3]
+//                 .replace("'", "")
+//                 .replace('"', "")
+//                 .replace("'", "")
+//                 .replace('"', "")
+//             );
+//             if (
+//               commaSapretedArray[3]
+//                 .replace("'", "")
+//                 .replace('"', "")
+//                 .replace("'", "")
+//                 .replace('"', "") == "individual"
+//             ) {
+//               db.collection("ofacSDN").add({
+//                 LASTNAME:
+//                   commaSapretedArray[2]
+//                     .replace("'", "")
+//                     .replace('"', "")
+//                     .replace("'", "")
+//                     .replace('"', "") == "-0- "
+//                     ? ""
+//                     : commaSapretedArray[2]
+//                         .replace("'", "")
+//                         .replace('"', "")
+//                         .replace("'", "")
+//                         .replace('"', "")
+//                         .trim(),
+//                 FIRSTNAME:
+//                   commaSapretedArray[1]
+//                     .replace("'", "")
+//                     .replace('"', "")
+//                     .replace("'", "")
+//                     .replace('"', "") == "-0- "
+//                     ? ""
+//                     : commaSapretedArray[1]
+//                         .replace("'", "")
+//                         .replace('"', "")
+//                         .replace("'", "")
+//                         .replace('"', "")
+//                         .trim(),
+//                 SDNTYPE: "individual",
+//                 PROGRAM: commaSapretedArray[4]
+//                   .replace("'", "")
+//                   .replace('"', "")
+//                   .replace("'", "")
+//                   .replace('"', "")
+//                   .trim(),
+//               });
+//             } else {
+//               db.collection("ofacSDN").add({
+//                 LASTNAME: "",
+//                 FIRSTNAME:
+//                   commaSapretedArray[1]
+//                     .replace("'", "")
+//                     .replace('"', "")
+//                     .replace("'", "")
+//                     .replace('"', "") == "-0- "
+//                     ? ""
+//                     : commaSapretedArray[1]
+//                         .replace("'", "")
+//                         .replace('"', "")
+//                         .replace("'", "")
+//                         .replace('"', "")
+//                         .trim(),
+//                 SDNTYPE:
+//                   commaSapretedArray[3]
+//                     .replace("'", "")
+//                     .replace('"', "")
+//                     .replace("'", "")
+//                     .replace('"', "") == "-0- "
+//                     ? ""
+//                     : commaSapretedArray[3]
+//                         .replace("'", "")
+//                         .replace('"', "")
+//                         .replace("'", "")
+//                         .replace('"', "")
+//                         .trim(),
+//                 PROGRAM:
+//                   commaSapretedArray[4]
+//                     .replace("'", "")
+//                     .replace('"', "")
+//                     .replace("'", "")
+//                     .replace('"', "") == "-0- "
+//                     ? ""
+//                     : commaSapretedArray[4]
+//                         .replace("'", "")
+//                         .replace('"', "")
+//                         .replace("'", "")
+//                         .replace('"', "")
+//                         .trim(),
+//               });
+//             }
+//           }
+//         });
+//       }
+//     });
+// });
