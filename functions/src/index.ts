@@ -6,11 +6,12 @@ const pdf = require("pdf-parse");
 const fs = require("fs");
 var cron = require("node-cron");
 const https = require("https");
-
+// require("firebase-functions/lib/logger/compat");
 const crypto = require("crypto");
 const plaid = require("plaid");
 const { exec } = require("child_process");
 const serviceAccount = require("./osupa-f56dd-firebase-adminsdk-x4l47-e2a1f979c2.json");
+// require("firebase-functions/lib/logger/compat");
 //var pixlabAPIkey;
 var plaidClient;
 
@@ -72,23 +73,47 @@ async function faceCompare(srcImage, targetImage): Promise<number> {
  * @param {String} country Country that the license belongs to, argument can be full string or country ISO code
  * @returns {Object} returns json object containing data parsed from the driver's license
  */
-async function IDParsing(img, country) {
+// async function IDParsing(img, country) {
+//   try {
+//     const response = await axios.default.get("https://api.pixlab.io/docscan", {
+//       params: {
+//         key: "041b94d6d1f33c9e138987f82b42ec43",
+//         img: img,
+//         type: "idcard",
+//         country: country,
+//       },
+//     });
+    
+//     if(response.status==400)
+//     {
+//       return null
+//     }
+//     else{
+//       return response.data.fields;
+//     }
+   
+//   } catch (error) {
+//     console.error(error);
+//   }
+// }
+async function IDParsingWithidanalyzer(img) {
   try {
-    const response = await axios.default.get("https://api.pixlab.io/docscan", {
-      params: {
-        key: "041b94d6d1f33c9e138987f82b42ec43",
-        img: img,
-        type: "idcard",
-        country: country,
+    const response = await axios.default.post("https://api.idanalyzer.com", 
+    {
+      apikey: "NOmw1UFmcVYzByIbCVyKbSpgP46R5tki",
+        url: img,
+        // type: "idcard",
+        // country: country,
       },
-    });
+    );
     
     if(response.status==400)
     {
       return null
     }
-    else{
-      return response.data.fields;
+    else{  console.log("=====Id analyzer data===");
+      console.dir(response.data);
+      return response.data;
     }
    
   } catch (error) {
@@ -142,25 +167,42 @@ async function dataCompare(
     .where("lastName", "==", ulastName)
     .get()
     .then((snapshot) => {
-      if(IDParseJSON["name"] != null || IDParseJSON["name"] != undefined) {
+      if(IDParseJSON["result"]["fullName"] != null || IDParseJSON["result"]["fullName"] != undefined) {
 
-      snapshot.docs.forEach((doc) => {
+      snapshot.docs.forEach(async (doc) => {
         const name_fuzz_ratio = fuzz.ratio(
-          ufirstName + umiddleName + ulastName,
-          IDParseJSON["name"]
+          ufirstName + ulastName,
+          IDParseJSON["result"]["firstName"]+IDParseJSON["result"]["lastName"]
         );
-        const address_fuzz_ratio = fuzz.ratio(
-          doc.data().address,
-          IDParseJSON["address"]
-        );
+        await doc.ref.collection("privateCollection").get().then((res)=>{
 
-        //dob_fuzz_ratio
+          res.docs.forEach(element => {
+            if(IDParseJSON["result"]["address1"]!=undefined||IDParseJSON["result"]["address1"]!=null||IDParseJSON["result"]["address1"]!='')
+          {
+            const address_fuzz_ratio = fuzz.ratio(
+              element.data()["address1"],
+              IDParseJSON["result"]["address1"]
+            );
+    
+            //dob_fuzz_ratio
+    
+            if (name_fuzz_ratio >= 85 && address_fuzz_ratio >= 85) {
+              dataValidation = true;
+            } else {
+              dataValidation = false;
+            }
+          }
+          else{
+            dataValidation = true;
+          }
+          });
 
-        if (name_fuzz_ratio >= 85 && address_fuzz_ratio >= 85) {
-          dataValidation = true;
-        } else {
-          dataValidation = false;
-        }
+          
+        })
+
+         
+
+        
       });
       
     } else {
@@ -465,9 +507,18 @@ async function createWalletAddress(userId: string) {
     //   "secret",
     //   "SBBHICIOU6XLUNJDIJVQZEOBVIHMV3JUNTVI3IACQFOEYWQ5SVC5D6FZ"
     // );
-    console.log('my public : '+publicKey)
+    // console.log('my public : '+publicKey)
+    var allocatedAmount="2";
+    await db.collection("dashboard_settings").doc("create_account_amount").get().then((result:any)=>{
+      if(result.data().amount!=undefined)
+      {
+        allocatedAmount=result.data().amount
+      }
+      
+    })
+    console.log("allocated amount :"+allocatedAmount)
     body.append("destination", publicKey);
-    body.append("amount", "2");
+    body.append("amount", allocatedAmount);
     body.append("memo", "test");
     const createWalletResponse = await axios.default.post(
       "https://sepapi.orokii.com/create_account",
@@ -589,8 +640,13 @@ exports.KYCVerification = functions.https.onCall(async (req: data, context) => {
   //setPixlabApiKey()
   await plaidInit();
   console.log("<<Starting>>");
-  var IDParseResponse = await IDParsing(idImage, "malaysia"); //'united states'
+  // var IDParseResponse = await IDParsing(idImage, "malaysia");//'united states'
+  var IDParseResponse = await IDParsingWithidanalyzer(idImage); 
 //------------------------------------------------
+
+if(IDParseResponse["result"]["daysToExpiry"]>30)
+{
+
   const faceCompareResponse: number = await faceCompare(idImage, selfie);
   if (faceCompareResponse != 20) {
     failureStatus.push("Face comparison failed");
@@ -662,6 +718,13 @@ exports.KYCVerification = functions.https.onCall(async (req: data, context) => {
     await createWalletAddress(userId);
   }
   return { kyc_score: KYCScore, failureStatus: failureStatus };
+}
+else{
+  failureStatus.push("Your document is about to expire or already expired.");
+  return { kyc_score: KYCScore, failureStatus: failureStatus };
+}
+
+
 });
 
 /**
